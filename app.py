@@ -233,7 +233,7 @@ st.markdown(
 st.write(
     """
 <div style="display: flex; align-items: center; margin-left: 0;">
-    <h1 style="display: inline-block;">PDF GPT</h1>
+    <h1 style="display: inline-block;">InQuest</h1>
     <sup style="margin-left:5px;font-size:small; color: green;">beta</sup>
 </div>
 """,
