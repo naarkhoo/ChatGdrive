@@ -4,7 +4,6 @@ import os
 import random
 from typing import Any, List, Tuple
 
-import openai
 import streamlit as st
 from langchain.agents import AgentExecutor, OpenAIFunctionsAgent
 from langchain.agents.agent_toolkits import create_retriever_tool
@@ -29,18 +28,13 @@ starter_message = "Ask me anything about the Doc!"
 @st.cache_resource
 def create_prompt(openai_api_key: str) -> Tuple[SystemMessage, ChatOpenAI]:
     """Create prompt."""
-    try:
-        # Make your OpenAI API request here
-        llm = ChatOpenAI(
-            temperature=0,
-            model_name="gpt-3.5-turbo",
-            streaming=True,
-            openai_api_key=openai_api_key,
-        )
-    except openai.error.AuthenticationError as e:
-        # Handle timeout error, e.g. retry or log
-        print(f"Please check your API key and try again. : {e}")
-        pass
+    # Make your OpenAI API request here
+    llm = ChatOpenAI(
+        temperature=0,
+        model_name="gpt-3.5-turbo",
+        streaming=True,
+        openai_api_key=openai_api_key,
+    )
 
     message = SystemMessage(
         content=(
