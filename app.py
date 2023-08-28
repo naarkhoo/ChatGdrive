@@ -20,7 +20,7 @@ from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
 
-st.set_page_config(page_title="PDF QA", page_icon="📚")
+st.set_page_config(page_title="InQuest", page_icon="📚")
 
 starter_message = "Ask me anything about the Doc!"
 
