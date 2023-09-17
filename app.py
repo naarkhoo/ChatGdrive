@@ -1,9 +1,10 @@
 """This is a public module. It should have a docstring."""
-import itertools
 import os
-import random
-from typing import Any, List, Tuple
+import pickle
+import webbrowser
+from typing import List, Tuple
 
+import gdown
 import streamlit as st
 from langchain.agents import AgentExecutor, OpenAIFunctionsAgent
 from langchain.agents.agent_toolkits import create_retriever_tool
@@ -11,7 +12,7 @@ from langchain.agents.openai_functions_agent.agent_token_buffer_memory import (
     AgentTokenBufferMemory,
 )
 from langchain.callbacks import StreamlitCallbackHandler
-from langchain.chains import QAGenerationChain
+from langchain.chains import RetrievalQA
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyPDFLoader
 from langchain.embeddings import HuggingFaceEmbeddings
@@ -20,9 +21,9 @@ from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
 
-st.set_page_config(page_title="InQuest", page_icon="📚")
+st.set_page_config(page_title="ChatGdrive", page_icon="📚")
 
-starter_message = "Ask me anything about the Doc!"
+starter_message = "Ask me anything about your Gdrive folder!"
 
 
 @st.cache_resource
@@ -38,8 +39,8 @@ def create_prompt(openai_api_key: str) -> Tuple[SystemMessage, ChatOpenAI]:
 
     message = SystemMessage(
         content=(
-            "You are a helpful chatbot who is tasked with answering questions about context given through uploaded documents."  # noqa: E501 comment
-            "Unless otherwise explicitly stated, it is probably fair to assume that questions are about the context given."  # noqa: E501 comment
+            "You are a helpful chatbot who is tasked with answering questions about context given the chunk of files content."  # noqa: E501 comment
+            "Unless otherwise explicitly stated, it is probably fair to assume that questions are about the context given provided."  # noqa: E501 comment
             "If there is any ambiguity, you probably assume they are about that."  # noqa: E501 comment
         )
     )
@@ -53,31 +54,39 @@ def create_prompt(openai_api_key: str) -> Tuple[SystemMessage, ChatOpenAI]:
 
 
 @st.cache_data
-def save_file_locally(file: Any) -> str:
-    """Save uploaded files locally."""
-    doc_path = os.path.join("tempdir", file.name)
-    with open(doc_path, "wb") as f:
-        f.write(file.getbuffer())
+def list_files_recursive(dir_path: str) -> List[str]:
+    """List all files in a directory recursively."""
+    all_files = []
 
-    return doc_path
+    # Walk through directory, including subdirectories
+    for root, dirs, files in os.walk(dir_path):
+        for file in files:
+            # Construct the full path to the file
+            full_path = os.path.join(root, file)
+            all_files.append(full_path)
+
+    return all_files
 
 
 @st.cache_data
-def load_docs(files: List[Any], url: bool = False) -> str:
+def load_docs2(dir_path: str) -> str:
     """Load and process the uploaded PDF files."""
-    if not url:
-        st.info("`Reading doc ...`")
-        documents = []
-        for file in files:
-            doc_path = save_file_locally(file)
-            pages = PyPDFLoader(doc_path)
+    documents = []
+    # get list of files from dir_path
+    list_of_files = list_files_recursive(dir_path)
+    print(f"found {len(list_of_files)} files")
+    for file in list_of_files:
+        if file.endswith(".pdf"):
+            pages = PyPDFLoader(file)
             documents.extend(pages.load())
+        else:
+            print(f"skipping {file}")
 
     return ",".join([doc.page_content for doc in documents])
 
 
 @st.cache_data
-def gen_embeddings() -> HuggingFaceEmbeddings:
+def generate_embeddings() -> HuggingFaceEmbeddings:
     """Generate embeddings for given model."""
     embeddings = HuggingFaceEmbeddings(
         cache_folder="hf_model"
@@ -99,11 +108,11 @@ def process_corpus(corpus: str, chunk_size: int = 1000, overlap: int = 50) -> Li
     st.write(f"Number of text chunks: {num_chunks}")
 
     # select embedding model
-    embeddings = gen_embeddings()
+    embeddings = generate_embeddings()
 
     # create vectorstore
     vectorstore = FAISS.from_texts(texts, embeddings).as_retriever(
-        search_kwargs={"k": 4}
+        search_kwargs={"k": 2}
     )
 
     # create retriever tool
@@ -121,7 +130,6 @@ def process_corpus(corpus: str, chunk_size: int = 1000, overlap: int = 50) -> Li
 def generate_agent_executer(text: str) -> List[AgentExecutor]:
     """Generate the memory functionality."""
     tools = process_corpus(text)
-
     agent = OpenAIFunctionsAgent(llm=llm, tools=tools, prompt=prompt)
     # Synthwave
 
@@ -134,61 +142,29 @@ def generate_agent_executer(text: str) -> List[AgentExecutor]:
     return agent_executor
 
 
-@st.cache_data
-def generate_eval(raw_text: str, N: int, chunk: int) -> List:
-    """Generate the focusing functionality."""
-    # Generate N questions from context of chunk chars
-    # IN: text, N questions, chunk size to draw question from in the doc
-    # OUT: eval set as JSON list
-    # raw_text = ','.join(raw_text)
-    update = st.empty()
-    ques_update = st.empty()
-    update.info("`Generating sample questions ...`")
-    n = len(raw_text)
-    starting_indices = [random.randint(0, n - chunk) for _ in range(N)]
-    sub_sequences = [raw_text[i : i + chunk] for i in starting_indices]
-    chain = QAGenerationChain.from_llm(llm)
-    eval_set = []
-    for i, b in enumerate(sub_sequences):
-        try:
-            qa = chain.run(b)
-            eval_set.append(qa)
-            ques_update.info(f"Creating Question: {i+1}")
-        except ValueError:
-            st.warning(f"Error in generating Question: {i+1}...", icon="⚠️")
-            continue
-
-    eval_set_full = list(itertools.chain.from_iterable(eval_set))
-
-    update.empty()
-    ques_update.empty()
-
-    return eval_set_full
+@st.cache_resource
+def create_temp_folder(temp_dir: str = "./temp_dir") -> None:
+    """Create a temp folder."""
+    if not os.path.exists(temp_dir):
+        # Create the temporary directory if it does not exist
+        os.makedirs(temp_dir)
+    else:
+        # Cleanup
+        for file in os.listdir(temp_dir):
+            os.remove(os.path.join(temp_dir, file))
 
 
-@st.cache_resource()
-def gen_side_bar_qa(text: str) -> None:
-    """Generate responses from query."""
-    if text:
-        # Check if there are no generated question-answer pairs in the session state
-        if "eval_set" not in st.session_state:
-            # Use the generate_eval function to generate question-answer pairs
-            num_eval_questions = 5  # Number of question-answer pairs to generate
-            st.session_state.eval_set = generate_eval(text, num_eval_questions, 3000)
-
-        # Display the question-answer pairs in the sidebar with smaller text
-        for i, qa_pair in enumerate(st.session_state.eval_set):
-            st.sidebar.markdown(
-                f"""
-                <div class="css-card">
-                <span class="card-tag">Question {i + 1}</span>
-                    <p style="font-size: 12px;">{qa_pair['question']}</p>
-                    <p style="font-size: 12px;">{qa_pair['answer']}</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        st.write("Ready to answer your questions.")
+@st.cache_resource
+def extract_gdrive_directory(gdrive_dir_link: str, temp_dir: str) -> None:
+    """Extract the Google Drive directory to the temporary directory."""
+    # gdrive_dir_link = 'https://drive.google.com/drive/folders/1rrLTxL8K4TUVSsQHx2bgLiLqGKsp7yU2' -O temp_dir --folder # noqa: E501 comment
+    # temp_dir = "./temp_dir"
+    status = gdown.download_folder(url=gdrive_dir_link, output=temp_dir)
+    if status is None:
+        st.error(
+            "Cannot retrieve the folder information from the link. You may need to\nchange the permission to 'Anyone with the link!",  # noqa: E501 comment
+            icon="🚨",
+        )
 
 
 # Add custom CSS
@@ -257,37 +233,6 @@ if not openai_api_key:
     st.info("Please add your OpenAI API key in the sidebar.")
     st.stop()
 
-# Use RecursiveCharacterTextSplitter as the default and only text splitter
-splitter_type = "RecursiveCharacterTextSplitter"
-
-uploaded_files = st.file_uploader(
-    "Upload a PDF Document", type=["pdf"], accept_multiple_files=True
-)
-
-if uploaded_files:
-    # Check if last_uploaded_files is not in session_state or
-    # if uploaded_files are different from last_uploaded_files
-    if (
-        "last_uploaded_files" not in st.session_state
-        or st.session_state.last_uploaded_files != uploaded_files
-    ):
-        st.session_state.last_uploaded_files = uploaded_files
-        if "eval_set" in st.session_state:
-            del st.session_state["eval_set"]
-
-    # Load and process the uploaded PDF or TXT files.
-    raw_pdf_text = load_docs(uploaded_files)
-    st.success("Documents uploaded and processed.")
-
-    # # Question and answering
-    # user_question = st.text_input("Enter your question:")
-
-    # embeddings = gen_embeddings()
-    # gen_side_bar_qa(raw_pdf_text)
-
-    # memory, agent_executor = generate_memory_agent_executre(raw_pdf_text)
-    agent_executor = generate_agent_executer(raw_pdf_text)
-
 if "messages" not in st.session_state or st.sidebar.button("Clear message history"):
     st.session_state["messages"] = [AIMessage(content=starter_message)]
 
@@ -298,8 +243,133 @@ for msg in st.session_state.messages:
         st.chat_message("user").write(msg.content)
     memory.chat_memory.add_message(msg)
 
-if user_question := st.chat_input(placeholder=starter_message):
+
+@st.cache_resource
+def generate_response(_retriever, _llm, query_text: str) -> str:
+    """Generate response."""
+    qa = RetrievalQA.from_chain_type(_llm, chain_type="stuff", retriever=_retriever)
+    return qa.run(query_text)
+
+
+tab1, tab2 = st.tabs(["embed", "search & chat"])
+
+with tab1:
+    if st.button("Coonect to Grive"):
+        webbrowser.open_new_tab("https://drive.google.com")
+
+    gdrive_dir_link = st.text_input("Enter the Google Drive Directory URL:")
+
+    # Add a placeholder for the user input
+    if st.button("Embedd folder"):
+        with st.spinner("Embedding folder..."):
+            # name the temp folder
+            temp_dir = "./temp_dir"
+
+            # create a temporary folder
+            create_temp_folder()
+            st.success("Temporary folder created")
+
+            # Download the Google Drive directory to the temporary directory
+            # The Google Drive directory must have the required permissions
+            extract_gdrive_directory(gdrive_dir_link, temp_dir)
+            st.success("Documents downloaded")
+
+            raw_pdf_text = load_docs2(temp_dir)
+            st.success("Documents processed")
+
+            chunk_size = 1000
+            overlap = 50
+
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=chunk_size, chunk_overlap=overlap
+            )
+
+            texts = text_splitter.split_text(raw_pdf_text)
+
+            # select embedding model
+            embeddings = generate_embeddings()
+
+            # create vectorstore
+            vectorstore = FAISS.from_texts(texts, embeddings).as_retriever(
+                search_kwargs={"k": 2, "search_type": "similarity_score"}
+            )
+
+            # save vectorstore into pickle
+            with open("my_variable.pkl", "wb") as f:
+                pickle.dump(vectorstore, f)
+
+        st.success("Embeddings generated.")
+
+
+# Initialize session_state if it hasn't been initialized
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+
+
+@st.cache_data
+def load_vdb():
+    """Load vectorstore."""
+    with open("my_variable.pkl", "rb") as f:
+        vectorstore = pickle.load(f)
+    return vectorstore
+
+
+with tab2:
+    st.header("Search and Chat")
+    if st.button("Load folder", key="load_folder_tab2"):
+        st.session_state.vectorstore = load_vdb()
+
+        prompt, llm = create_prompt(openai_api_key)
+
+        tool = create_retriever_tool(
+            st.session_state.vectorstore,
+            "search_docs",
+            "Searches and returns documents using the context provided as a source, relevant to the user input question.",  # noqa: E501 comment
+        )
+
+        agent = OpenAIFunctionsAgent(llm=llm, tools=[tool], prompt=prompt)
+        # Synthwave
+
+        agent_executor = AgentExecutor(
+            agent=agent,
+            tools=[tool],
+            verbose=True,
+            return_intermediate_steps=True,
+        )
+
+        st.session_state["agent_executor"] = agent_executor
+        st.success("Loaded Embeddings.")
+
+    query_text = st.text_input(
+        "Enter your question:", placeholder="Please provide a short summary."
+    )  # , disabled=not st.button("Load folder"
+
+    # Form input and query
+    result = []
+    with st.form("myform", clear_on_submit=True):
+        submitted = st.form_submit_button("Submit", disabled=not (query_text))
+        if submitted and st.session_state.vectorstore is not None:
+            with st.spinner("Calculating..."):
+                response = st.session_state.vectorstore.get_relevant_documents(
+                    query_text
+                )
+                result.append(response)
+
+    if len(result):
+        st.info(response)
+
+
+st.subheader("Chat with the bot")
+if user_question := st.chat_input(
+    placeholder=starter_message,
+    key="chat_input_tab3",
+    disabled=st.session_state.vectorstore == None,
+):
     st.chat_message("user").write(user_question)
+
+    # added this because of the error
+    if st.session_state["agent_executor"] is not None:
+        agent_executor = st.session_state["agent_executor"]
 
     with st.chat_message("assistant"):
         st_callback = StreamlitCallbackHandler(
