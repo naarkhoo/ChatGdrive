@@ -1,5 +1,5 @@
 ---
-title: ChatPDF
+title: ChatGdrive
 emoji: 🏃
 colorFrom: pink
 colorTo: gray
