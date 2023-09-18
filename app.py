@@ -358,7 +358,6 @@ with tab2:
     if len(result):
         st.info(response)
 
-
 st.subheader("Chat with the bot")
 if user_question := st.chat_input(
     placeholder=starter_message,

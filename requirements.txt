@@ -14,3 +14,4 @@ faiss_cpu==1.7.4
 tiktoken==0.4.0
 watchdog==3.0.0
 git+https://github.com/streamlit/files-connection
+gdown==4.7.1

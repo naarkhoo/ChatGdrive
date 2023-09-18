@@ -1,6 +1,7 @@
 tempdir/*
 hf_model/* 
 .streamlit/*
+my_variable.pkl
 
 # local directory
 temp_dir/
